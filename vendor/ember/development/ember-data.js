@@ -3439,14 +3439,9 @@ DS.Adapter = Ember.Object.extend({
 var set = Ember.set;
 
 Ember.onLoad('application', function(app) {
-  app.registerInjection({
-    name: "store",
-    before: "controllers",
-
-    injection: function(app, stateManager, property) {
-      if (property === 'Store') {
-        set(stateManager, 'store', app[property].create());
-      }
+  app.registerInjection(function(app, stateManager, property) {
+    if (property === 'Store') {
+      set(stateManager, 'store', app[property].create());
     }
   });
 });
@@ -3686,9 +3681,7 @@ DS.RESTAdapter = DS.Adapter.extend({
   },
 
   sideload: function(store, type, json, root) {
-    var sideloadedType, mappings, loaded = {};
-
-    loaded[root] = true;
+    var sideloadedType, mappings;
 
     for (var prop in json) {
       if (!json.hasOwnProperty(prop)) { continue; }
@@ -3701,32 +3694,11 @@ DS.RESTAdapter = DS.Adapter.extend({
         Ember.assert("Your server returned a hash with the key " + prop + " but you have no mappings", !!mappings);
 
         sideloadedType = get(mappings, prop);
-
-        if (typeof sideloadedType === 'string') {
-          sideloadedType = getPath(window, sideloadedType);
-        }
-
         Ember.assert("Your server returned a hash with the key " + prop + " but you have no mapping for it", !!sideloadedType);
       }
 
-      this.sideloadAssociations(store, sideloadedType, json, prop, loaded);
+      this.loadValue(store, sideloadedType, json[prop]);
     }
-  },
-
-  sideloadAssociations: function(store, type, json, prop, loaded) {
-    loaded[prop] = true;
-
-    get(type, 'associationsByName').forEach(function(key, meta) {
-      key = meta.key || key;
-      if (meta.kind === 'belongsTo') {
-        key = this.pluralize(key);
-      }
-      if (json[key] && !loaded[key]) {
-        this.sideloadAssociations(store, meta.type, json, key, loaded);
-      }
-    }, this);
-
-    this.loadValue(store, type, json[prop]);
   },
 
   loadValue: function(store, type, value) {
