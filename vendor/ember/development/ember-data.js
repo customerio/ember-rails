@@ -36,44 +36,14 @@ DS.RecordArray = Ember.ArrayProxy.extend({
   // The store that created this record array.
   store: null,
 
-  init: function() {
-    this.contentWillChange();
-    this._super();
-  },
-
-  contentWillChange: Ember.beforeObserver(function() {
-    set(this, 'recordCache', []);
-  }, 'content'),
-
-  contentArrayDidChange: function(array, index, removed, added) {
-    var recordCache = get(this, 'recordCache');
-    var args = [index, 0].concat(new Array(added));
-
-    recordCache.splice.apply(recordCache, args);
-  },
-
-  contentArrayWillChange: function(array, index, removed, added) {
-    var recordCache = get(this, 'recordCache');
-    recordCache.splice(index, removed);
-  },
-
   objectAtContent: function(index) {
-    var recordCache = get(this, 'recordCache');
-    var record = recordCache[index];
+    var content = get(this, 'content'),
+        clientId = content.objectAt(index),
+        store = get(this, 'store');
 
-    if (!record) {
-      var store = get(this, 'store');
-      var content = get(this, 'content');
-
-      var contentObject = content.objectAt(index);
-
-      if (contentObject !== undefined) {
-        record = store.findByClientId(get(this, 'type'), contentObject);
-        recordCache[index] = record;
-      }
+    if (clientId !== undefined) {
+      return store.findByClientId(get(this, 'type'), clientId);
     }
-
-    return record;
   }
 });
 
@@ -158,7 +128,7 @@ Set.prototype = {
 
     delete hash[guid];
     var list = this.list,
-        index = Ember.ArrayUtils.indexOf(this, item);
+        index = Ember.EnumerableUtils.indexOf(this, item);
 
     list.splice(index, 1);
   },
@@ -1050,8 +1020,7 @@ DS.Store = Ember.Object.extend({
 
   findByClientId: function(type, clientId, id) {
     var recordCache = get(this, 'recordCache'),
-        dataCache = this.typeMapFor(type).cidToHash,
-        record;
+        dataCache, record;
 
     // If there is already a clientId assigned for this
     // type/id combination, try to find an existing
@@ -1065,6 +1034,8 @@ DS.Store = Ember.Object.extend({
         // create a new instance of the model type in the
         // 'isLoading' state
         record = this.materializeRecord(type, clientId);
+
+        dataCache = this.typeMapFor(type).cidToHash;
 
         if (typeof dataCache[clientId] === 'object') {
           record.send('didChangeData');
@@ -1536,7 +1507,7 @@ DS.Store = Ember.Object.extend({
       ids = [];
       var primaryKey = type.proto().primaryKey;
 
-      ids = Ember.ArrayUtils.map(hashes, function(hash) {
+      ids = Ember.EnumerableUtils.map(hashes, function(hash) {
         return hash[primaryKey];
       });
     }
@@ -2191,7 +2162,7 @@ var DirtyState = DS.State.extend({
 
     invokeLifecycleCallbacks: function(manager) {
       var record = get(manager, 'record');
-      record.fire('becameInvalid', record);
+      record.trigger('becameInvalid', record);
     }
   })
 });
@@ -2281,7 +2252,7 @@ var states = {
       // TRANSITIONS
       exit: function(manager) {
         var record = get(manager, 'record');
-        record.fire('didLoad');
+        record.trigger('didLoad');
       },
 
       // EVENTS
@@ -2335,9 +2306,9 @@ var states = {
         invokeLifecycleCallbacks: function(manager, dirtyType) {
           var record = get(manager, 'record');
           if (dirtyType === 'created') {
-            record.fire('didCreate', record);
+            record.trigger('didCreate', record);
           } else {
-            record.fire('didUpdate', record);
+            record.trigger('didUpdate', record);
           }
         }
       }),
@@ -2440,7 +2411,7 @@ var states = {
 
         invokeLifecycleCallbacks: function(manager) {
           var record = get(manager, 'record');
-          record.fire('didDelete', record);
+          record.trigger('didDelete', record);
         }
       })
     }),
@@ -2455,7 +2426,7 @@ var states = {
 
       invokeLifecycleCallbacks: function(manager) {
         var record = get(manager, 'record');
-        record.fire('becameError', record);
+        record.trigger('becameError', record);
       }
     })
   })
@@ -2914,7 +2885,7 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
         if (cachedValue) {
           var key = association.options.key || name,
               ids = data.get(key) || [];
-          var clientIds = Ember.ArrayUtils.map(ids, function(id) {
+          var clientIds = Ember.EnumerableUtils.map(ids, function(id) {
             return store.clientIdForId(association.type, id);
           });
 
@@ -2931,7 +2902,7 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
     Override the default event firing from Ember.Evented to
     also call methods with the given name.
   */
-  fire: function(name) {
+  trigger: function(name) {
     this[name].apply(this, [].slice.call(arguments, 1));
     this._super.apply(this, arguments);
   }
@@ -3439,9 +3410,28 @@ DS.Adapter = Ember.Object.extend({
 var set = Ember.set;
 
 Ember.onLoad('application', function(app) {
-  app.registerInjection(function(app, stateManager, property) {
-    if (property === 'Store') {
-      set(stateManager, 'store', app[property].create());
+  app.registerInjection({
+    name: "store",
+    before: "controllers",
+
+    injection: function(app, stateManager, property) {
+      if (property === 'Store') {
+        set(stateManager, 'store', app[property].create());
+      }
+    }
+  });
+
+  app.registerInjection({
+    name: "giveStoreToControllers",
+
+    injection: function(app, stateManager, property) {
+      if (property.match(/Controller$/)) {
+        var controllerName = property.charAt(0).toLowerCase() + property.substr(1);
+        var store = stateManager.get('store');
+        var controller = stateManager.get(controllerName);
+
+        controller.set('store', store);
+      }
     }
   });
 });
@@ -3681,7 +3671,9 @@ DS.RESTAdapter = DS.Adapter.extend({
   },
 
   sideload: function(store, type, json, root) {
-    var sideloadedType, mappings;
+    var sideloadedType, mappings, loaded = {};
+
+    loaded[root] = true;
 
     for (var prop in json) {
       if (!json.hasOwnProperty(prop)) { continue; }
@@ -3694,11 +3686,32 @@ DS.RESTAdapter = DS.Adapter.extend({
         Ember.assert("Your server returned a hash with the key " + prop + " but you have no mappings", !!mappings);
 
         sideloadedType = get(mappings, prop);
+
+        if (typeof sideloadedType === 'string') {
+          sideloadedType = getPath(window, sideloadedType);
+        }
+
         Ember.assert("Your server returned a hash with the key " + prop + " but you have no mapping for it", !!sideloadedType);
       }
 
-      this.loadValue(store, sideloadedType, json[prop]);
+      this.sideloadAssociations(store, sideloadedType, json, prop, loaded);
     }
+  },
+
+  sideloadAssociations: function(store, type, json, prop, loaded) {
+    loaded[prop] = true;
+
+    get(type, 'associationsByName').forEach(function(key, meta) {
+      key = meta.key || key;
+      if (meta.kind === 'belongsTo') {
+        key = this.pluralize(key);
+      }
+      if (json[key] && !loaded[key]) {
+        this.sideloadAssociations(store, meta.type, json, key, loaded);
+      }
+    }, this);
+
+    this.loadValue(store, type, json[prop]);
   },
 
   loadValue: function(store, type, value) {
