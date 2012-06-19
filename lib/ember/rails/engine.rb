@@ -20,6 +20,7 @@ module Ember
 
         # Add the gem's vendored ember to the end of the asset search path
         variant = app.config.ember.variant
+
         ember_path = File.expand_path("../../../../vendor/ember/#{variant}", __FILE__)
         app.config.assets.paths.unshift ember_path
       end
